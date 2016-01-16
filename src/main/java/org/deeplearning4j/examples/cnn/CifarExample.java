@@ -1,11 +1,14 @@
 package org.deeplearning4j.examples.cnn;
 
+import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.Text;
 import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.canova.image.loader.LFWLoader;
-import org.deeplearning4j.datasets.iterator.DataSetIterator;
-import org.deeplearning4j.datasets.iterator.impl.LFWDataSetIterator;
+import org.apache.spark.input.PortableDataStream;
+import org.canova.image.loader.CifarLoader;
+import org.canova.spark.functions.data.FilesAsBytesFunction;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.GradientNormalization;
@@ -20,8 +23,11 @@ import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.api.IterationListener;
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
+import org.deeplearning4j.spark.canova.CanovaByteDataSetFunction;
 import org.deeplearning4j.spark.impl.multilayer.SparkDl4jMultiLayer;
+import org.nd4j.linalg.api.buffer.DataBuffer;
 import org.nd4j.linalg.dataset.DataSet;
+import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,33 +35,26 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 
 /**
- * Reference: architecture partially based on DeepFace: http://mmlab.ie.cuhk.edu.hk/pdf/YiSun_CVPR14.pdf
- * Note: this is a sparse dataset with only 1 example for many of the faces; thus, performance is low.
- * Ideally train on a larger dataset like celebs to get params.
- *
- * Currently set to only use the subset images, names starting with A.
- * Switch to NUM_LABELS & NUM_IMAGES and set subset to false to use full dataset.
  */
-public class LFWExample {
+public class CifarExample {
+    protected static final Logger log = LoggerFactory.getLogger(CifarExample.class);
 
-    protected static final Logger log = LoggerFactory.getLogger(LFWExample.class);
-
-    protected static final int HEIGHT = 40; //
-    protected static final int WIDTH = 40;
+    protected static final int HEIGHT = 32;
+    protected static final int WIDTH = 32;
     protected static final int CHANNELS = 3;
-    protected static final int outputNum = LFWLoader.NUM_LABELS;
-    protected static final int numSamples = 2000; //LFWLoader.SUB_NUM_IMAGES - 4;
-    protected static int batchSize = numSamples / 100;
+    protected static final int outputNum = CifarLoader.NUM_LABELS;
+    protected static final int numTrainSamples = 5000; // CifarLoader.NUM_TRAIN_IMAGES;
+    protected static final int numTestSamples = 5000; //CifarLoader.NUM_TEST_IMAGES;
+    protected static int batchSize = 250;
     protected static int iterations = 5;
     protected static int seed = 123;
-    protected static boolean useSubset = false;
 
     public static void main(String[] args) throws Exception {
 
-        double splitTrainNum = 0.8;
-        int nTrain = (int) (numSamples * splitTrainNum);
-        int nTest = numSamples - nTrain;
+        Nd4j.dtype = DataBuffer.Type.DOUBLE;
+
         int listenerFreq = batchSize;
+        List<String> labels = new CifarLoader().getLabels();
         int nEpochs = 1;
 
         // Setup SparkContext
@@ -63,25 +62,16 @@ public class LFWExample {
                 .setMaster("local[*]");
         sparkConf.setAppName("LFW");
         sparkConf.set(SparkDl4jMultiLayer.AVERAGE_EACH_ITERATION, String.valueOf(true));
-//        conf.set(SparkDl4jMultiLayer.ACCUM_GRADIENT, String.valueOf(true));
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         log.info("Load data....");
-        DataSetIterator lfw = new LFWDataSetIterator(batchSize, numSamples, new int[]{HEIGHT, WIDTH, CHANNELS}, outputNum, useSubset, new Random(seed));
-        List<String> labels = lfw.getLabels();
+        JavaPairRDD<String,PortableDataStream> sparkData = sc.binaryFiles(CifarLoader.TRAINPATH.toString());
+        JavaPairRDD<Text, BytesWritable> filesAsBytes = sparkData.mapToPair(new FilesAsBytesFunction());
+        JavaRDD<DataSet> train = filesAsBytes.map(new CanovaByteDataSetFunction(0, CifarLoader.NUM_LABELS, batchSize, numTrainSamples, CifarLoader.BYTEFILELEN));
 
-        List<DataSet> train = new ArrayList<>(nTrain);
-        List<DataSet> test = new ArrayList<>(nTest);
-
-        int c = 0;
-        while(lfw.hasNext()){
-            if((c += batchSize) <= nTrain) train.add(lfw.next());
-            else test.add(lfw.next());
-        }
-
-        JavaRDD<DataSet> trainData = sc.parallelize(train);
-        JavaRDD<DataSet> testData = sc.parallelize(test);
-
+        sparkData = sc.binaryFiles(CifarLoader.TESTPATH.toString());
+        filesAsBytes = sparkData.mapToPair(new FilesAsBytesFunction());
+        JavaRDD<DataSet> test = filesAsBytes.map(new CanovaByteDataSetFunction(0, CifarLoader.NUM_LABELS, batchSize, numTestSamples, CifarLoader.BYTEFILELEN));
 
         log.info("Build model....");
         MultiLayerConfiguration.Builder builder = new NeuralNetConfiguration.Builder()
@@ -148,13 +138,14 @@ public class LFWExample {
 
 
         log.info("Train model...");
+
         for (int i = 0; i < nEpochs; i++) {
-            sparkNetwork.fitDataSet(trainData);
+            sparkNetwork.fitDataSet(train);
             System.out.println("----- Epoch " + i + " complete -----");
         }
 
         log.info("Eval model...");
-        Evaluation evalActual = sparkNetwork.evaluate(testData, labels, false);
+        Evaluation evalActual = sparkNetwork.evaluate(test, labels, false);
         log.info(evalActual.stats());
 
 
@@ -163,4 +154,6 @@ public class LFWExample {
 
 
     }
+
+
 }
