@@ -6,8 +6,10 @@ import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.python.SerDeUtil;
 import org.apache.spark.input.PortableDataStream;
 import org.canova.image.loader.BaseImageLoader;
+import org.canova.image.loader.ImageByteBuffer;
 import org.canova.image.recordreader.ImageRecordReader;
 import org.canova.spark.functions.data.FilesAsBytesFunction;
 import org.canova.spark.functions.data.RecordReaderBytesFunction;
@@ -24,13 +26,18 @@ import org.deeplearning4j.optimize.api.IterationListener;
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
 import org.deeplearning4j.spark.canova.CanovaDataSetFunction;
 import org.deeplearning4j.spark.impl.multilayer.SparkDl4jMultiLayer;
+import org.nd4j.linalg.api.buffer.DataBuffer;
+import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
+import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.canova.api.writable.Writable;
+import scala.Tuple2;
 
 import java.io.File;
+import java.io.FilenameFilter;
 import java.util.*;
 
 /**
@@ -46,49 +53,65 @@ public class FaceDetection {
     protected static final Logger log = LoggerFactory.getLogger(FaceDetection.class);
 
     public final static int NUM_IMAGES = 2215; // some are 50 and others 700
-    public final static int NUM_LABELS = 10;
+    public final static int NUM_LABELS = 2;// 10;
     public final static int WIDTH = 50; // size varies
     public final static int HEIGHT = 50;
     public final static int CHANNELS = 3;
 
     public static void main(String[] args) {
+        Nd4j.dtype = DataBuffer.Type.DOUBLE;
 
         boolean appendLabels = true;
         int numExamples = 50;
         int batchSize = 10;
         int numBatches = NUM_IMAGES/batchSize;
 
-        int iterations = 5;
+        int iterations = 1;
         int seed = 123;
         double[] splitTrainNum = new double[]{ .8, .2};
         int listenerFreq = batchSize;
 
-        String[] tags = {"ace", "boom", "crew", "dog", "eon"};
-        List<String> labels = Arrays.asList(tags);
-
         // Setup SparkContext
         SparkConf sparkConf = new SparkConf()
                 .setMaster("local[*]");
-        sparkConf.setAppName("LFW");
+        sparkConf.setAppName("FaceDetection");
+        sparkConf.set("spak.executor.memory", "4g");
+        sparkConf.set("spak.driver.memory", "4g");
+
         sparkConf.set(SparkDl4jMultiLayer.AVERAGE_EACH_ITERATION, String.valueOf(true));
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
-
         log.info("Load data....");
-        File mainPath = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample");
+        // man / woman classification
+        File mainPath = new File(BaseImageLoader.BASE_DIR, "gender_class/*");
+        List<String> labels = Arrays.asList(new String[]{"man", "woman"});
+
+        // classification by name
+//        File mainPath = new File(BaseImageLoader.BASE_DIR, "ms_sample/*");
+//        List<String> labels = Arrays.asList(new String[]{"aaron_carter", "martina_hingis", "michelle_obama", "adam_brody"});
+
+//        File mainPath = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample/*");
+//        String[] tags = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample").list(new FilenameFilter() {
+//            @Override
+//            public boolean accept(File dir, String name) {
+//                return dir.isDirectory();
+//            }
+//        });
+//        List<String> labels = Arrays.asList(tags);
+
         JavaPairRDD<String,PortableDataStream> sparkData = sc.binaryFiles(mainPath.toString());
         JavaPairRDD<Text,BytesWritable> filesAsBytes = sparkData.mapToPair(new FilesAsBytesFunction());
         RecordReaderBytesFunction recordReader = new RecordReaderBytesFunction(new ImageRecordReader(WIDTH, HEIGHT, CHANNELS, appendLabels, labels));
 
         JavaRDD<Collection<Writable>> data = filesAsBytes.map(recordReader);
-        JavaRDD<DataSet> fullData = data.map(new CanovaDataSetFunction(-1, NUM_LABELS, batchSize, false));
+        JavaRDD<DataSet> fullData = data.map(new CanovaDataSetFunction(-1, NUM_LABELS, false));
 
         fullData.cache();
         JavaRDD<DataSet>[] trainTestSplit = fullData.randomSplit(splitTrainNum);
 
 
-        // TODO coordinate readers and functions to load multiple types of datasets - DATA not loading yet
-        List<DataSet> v = fullData.collect();
+        // TODO coordinate readers and functions to load multiple types of datasets
+
 
         log.info("Build model....");
         MultiLayerConfiguration.Builder builder = new NeuralNetConfiguration.Builder()
@@ -157,10 +180,11 @@ public class FaceDetection {
 
 
         log.info("Train model....");
-        sparkNetwork.fitDataSet(trainTestSplit[0].repartition(6));
+//        sparkNetwork.fitDataSet(fullData);
+        sparkNetwork.fitDataSet(trainTestSplit[0].coalesce(5));
 
         log.info("Evaluate model....");
-        Evaluation evalActual = sparkNetwork.evaluate(trainTestSplit[1].repartition(6), labels, false);
+        Evaluation evalActual = sparkNetwork.evaluate(trainTestSplit[1].coalesce(5), labels);
         log.info(evalActual.stats());
 
         fullData.unpersist();

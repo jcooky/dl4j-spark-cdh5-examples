@@ -70,7 +70,7 @@ public class CifarExample {
         // Setup SparkContext
         SparkConf sparkConf = new SparkConf()
                 .setMaster("local[6]");
-        sparkConf.setAppName("LFW");
+        sparkConf.setAppName("Cifar");
         sparkConf.set(SparkDl4jMultiLayer.AVERAGE_EACH_ITERATION, String.valueOf(true));
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
@@ -189,7 +189,7 @@ public class CifarExample {
         test.cache();
 
         log.info("Eval model...");
-        Evaluation evalActual = sparkNetwork.evaluate(test, labels, false);
+        Evaluation evalActual = sparkNetwork.evaluate(test, labels);
         log.info(evalActual.stats());
         List<DataSet> dst = test.collect();
 

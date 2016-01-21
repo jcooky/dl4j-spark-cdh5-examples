@@ -172,7 +172,7 @@ public class LFWExample {
         }
 
         log.info("Eval model...");
-        Evaluation evalActual = sparkNetwork.evaluate(testData, labels, false);
+        Evaluation evalActual = sparkNetwork.evaluate(testData, labels);
         log.info(evalActual.stats());
 
 
