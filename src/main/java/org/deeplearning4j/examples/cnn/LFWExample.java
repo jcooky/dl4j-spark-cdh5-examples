@@ -89,7 +89,6 @@ public class LFWExample {
         List<DataSet> train = new ArrayList<>(nTrain);
         List<DataSet> test = new ArrayList<>(nTest);
 
-        int c = 0;
         while(lfw.hasNext()){
             DataSet ds = lfw.next();
             SplitTestAndTrain next = ds.splitTestAndTrain(splitTrainNum, new Random(seed));

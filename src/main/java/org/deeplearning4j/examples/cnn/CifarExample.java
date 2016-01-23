@@ -36,13 +36,13 @@ import scala.Tuple2;
 import java.util.*;
 
 /**
- * CIFAR-10 is an image dataset created by Alex Krizhevsky, Vinod Nair, and Geoffrey Hinton. The dataset inculdes 60K
- * tiny RGB images sized 32 x 32 pixels covering 10 classes. There are 50K training images and 10K test images.
- *
- * Use this example to run cifar-10.
- *
- * Reference: https://www.cs.toronto.edu/~kriz/cifar.html
- * Dataset url: https://s3.amazonaws.com/dl4j-distribution/cifar-small.bin
+* CIFAR-10 is an image dataset created by Alex Krizhevsky, Vinod Nair, and Geoffrey Hinton. The dataset inculdes 60K
+* tiny RGB images sized 32 x 32 pixels covering 10 classes. There are 50K training images and 10K test images.
+*
+* Use this example to run cifar-10.
+*
+* Reference: https://www.cs.toronto.edu/~kriz/cifar.html
+* Dataset url: https://s3.amazonaws.com/dl4j-distribution/cifar-small.bin
  */
 
 public class CifarExample {
