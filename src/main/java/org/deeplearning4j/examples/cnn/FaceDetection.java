@@ -17,6 +17,14 @@ import org.canova.spark.functions.data.FilesAsBytesFunction;
 import org.canova.spark.functions.data.RecordReaderBytesFunction;
 import org.deeplearning4j.datasets.canova.RecordReaderDataSetIterator;
 import org.deeplearning4j.datasets.iterator.DataSetIterator;
+import org.deeplearning4j.earlystopping.EarlyStoppingConfiguration;
+import org.deeplearning4j.earlystopping.EarlyStoppingModelSaver;
+import org.deeplearning4j.earlystopping.EarlyStoppingResult;
+import org.deeplearning4j.earlystopping.saver.LocalFileModelSaver;
+import org.deeplearning4j.earlystopping.scorecalc.DataSetLossCalculator;
+import org.deeplearning4j.earlystopping.termination.MaxEpochsTerminationCondition;
+import org.deeplearning4j.earlystopping.termination.MaxTimeIterationTerminationCondition;
+import org.deeplearning4j.earlystopping.trainer.EarlyStoppingTrainer;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.GradientNormalization;
@@ -43,6 +51,7 @@ import java.io.File;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * MSRA-CFW Dataset of Celebrity Faces on the Web is a data set created by MicrosoftResearch.
@@ -58,23 +67,24 @@ public class FaceDetection {
 
     public final static int NUM_IMAGES = 2215; // some are 50 and others 700
     public final static int NUM_LABELS = 10;
-    public final static int WIDTH = 30; // size varies
-    public final static int HEIGHT = 30;
+    public final static int WIDTH = 80; // size varies
+    public final static int HEIGHT = 80;
     public final static int CHANNELS = 3;
 
     public static void main(String[] args) {
         Nd4j.dtype = DataBuffer.Type.DOUBLE;
 
         boolean appendLabels = true;
-        int numExamples = 500;
+        int numExamples = 100;
         int batchSize = 1;
         int numBatches = NUM_IMAGES/batchSize;
 
         int iterations = 5;
+        int epochs = 3;
         int seed = 123;
         double[] splitTrainTest = new double[]{ .8, .2};
         int listenerFreq = batchSize;
-        int nTrain = (int) (numExamples * 0.6);
+        int nTrain = (int) (numExamples * 0.8);
         int nTest = numExamples - nTrain;
 
         // Setup SparkContext
@@ -88,14 +98,13 @@ public class FaceDetection {
 
         log.info("Load data....");
 
-        String[] tags = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample").list(new FilenameFilter() {
-            @Override
-            public boolean accept(File dir, String name) {
-                return dir.isDirectory();
-            }
-        });
-        List<String> labels = Arrays.asList(tags);
-        RecordReader recordReader = new ImageRecordReader(WIDTH, HEIGHT, CHANNELS, appendLabels, labels);
+//        String[] tags = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample").list(new FilenameFilter() {
+//            @Override
+//            public boolean accept(File dir, String name) {
+//                return dir.isDirectory();
+//            }
+//        });
+//        List<String> labels = Arrays.asList(tags);
 
         // Load as sequence files onto RDD
         // man / woman classification
@@ -103,11 +112,10 @@ public class FaceDetection {
 //        List<String> labels = Arrays.asList(new String[]{"man", "woman"});
 
         // classification by name
-//        File mainPath = new File(BaseImageLoader.BASE_DIR, "ms_sample/*");
-//        List<String> labels = Arrays.asList(new String[]{"aaron_carter", "martina_hingis", "michelle_obama", "adam_brody"});
+        File mainPath = new File(BaseImageLoader.BASE_DIR, "ms_sample");
+        List<String> labels = Arrays.asList(new String[]{"aaron_carter", "martina_hingis", "michelle_obama", "adam_brody"});
 
 //        File mainPath = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample/*");
-
 //        JavaPairRDD<String,PortableDataStream> sparkData = sc.binaryFiles(mainPath.toString());
 //        JavaPairRDD<Text,BytesWritable> filesAsBytes = sparkData.mapToPair(new FilesAsBytesFunction());
 //        RecordReaderBytesFunction rrFunc = new RecordReaderBytesFunction(recordReader);
@@ -118,7 +126,9 @@ public class FaceDetection {
 
 
         // Alternative load
-        File mainPath = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample");
+//        File mainPath = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample");
+
+        RecordReader recordReader = new ImageRecordReader(WIDTH, HEIGHT, CHANNELS, appendLabels, labels);
         try {
             recordReader.initialize(new FileSplit(mainPath, BaseImageLoader.ALLOWED_FORMATS, new Random(123)));
         } catch (IOException | InterruptedException e) {
@@ -153,8 +163,7 @@ public class FaceDetection {
                 .weightInit(WeightInit.XAVIER)
                 .gradientNormalization(GradientNormalization.RenormalizeL2PerLayer)
                 .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
-                .learningRate(1e-2)
-                .learningRateScoreBasedDecayRate(.10)
+                .learningRate(5e-2)
                 .momentum(0.9)
                 .regularization(true)
                 .l2(1e-3)
@@ -258,9 +267,12 @@ public class FaceDetection {
         SparkDl4jMultiLayer sparkNetwork = new SparkDl4jMultiLayer(sc, model);
 
 
+
         log.info("Train model....");
 //        sparkNetwork.fitDataSet(trainTestSplit[0].coalesce(5));
-        sparkNetwork.fitDataSet(sparkDataTrain);
+        for(int i = 0; i < epochs; i++){
+            sparkNetwork.fitDataSet(sparkDataTrain);
+        }
         sparkDataTrain.unpersist();
 
         log.info("Evaluate model....");
