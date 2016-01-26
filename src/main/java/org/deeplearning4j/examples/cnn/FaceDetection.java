@@ -17,14 +17,6 @@ import org.canova.spark.functions.data.FilesAsBytesFunction;
 import org.canova.spark.functions.data.RecordReaderBytesFunction;
 import org.deeplearning4j.datasets.canova.RecordReaderDataSetIterator;
 import org.deeplearning4j.datasets.iterator.DataSetIterator;
-import org.deeplearning4j.earlystopping.EarlyStoppingConfiguration;
-import org.deeplearning4j.earlystopping.EarlyStoppingModelSaver;
-import org.deeplearning4j.earlystopping.EarlyStoppingResult;
-import org.deeplearning4j.earlystopping.saver.LocalFileModelSaver;
-import org.deeplearning4j.earlystopping.scorecalc.DataSetLossCalculator;
-import org.deeplearning4j.earlystopping.termination.MaxEpochsTerminationCondition;
-import org.deeplearning4j.earlystopping.termination.MaxTimeIterationTerminationCondition;
-import org.deeplearning4j.earlystopping.trainer.EarlyStoppingTrainer;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.GradientNormalization;
@@ -38,6 +30,7 @@ import org.deeplearning4j.optimize.api.IterationListener;
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
 import org.deeplearning4j.spark.canova.CanovaDataSetFunction;
 import org.deeplearning4j.spark.impl.multilayer.SparkDl4jMultiLayer;
+import org.kohsuke.args4j.Option;
 import org.nd4j.linalg.api.buffer.DataBuffer;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.SplitTestAndTrain;
@@ -46,6 +39,9 @@ import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.canova.api.writable.Writable;
+import org.kohsuke.args4j.CmdLineException;
+import org.kohsuke.args4j.CmdLineParser;
+
 
 import java.io.File;
 import java.io.FilenameFilter;
@@ -71,33 +67,69 @@ public class FaceDetection {
     public final static int HEIGHT = 80;
     public final static int CHANNELS = 3;
 
-    public static void main(String[] args) {
+    // values to pass in from command line when compiled, esp running remotely
+    @Option(name="--numExamples",usage="Number of examples",aliases="-nE")
+    protected int numExamples = 100;
+    @Option(name="--batchSize",usage="Batch size",aliases="-b")
+    protected int batchSize = 1;
+    @Option(name="--epochs",usage="Number of epochs",aliases="-ep")
+    protected int epochs = 2;
+    @Option(name="--iter",usage="Number of iterations",aliases="-i")
+    protected int iterations = 2;
+    @Option(name="--numLabels",usage="Number of categories",aliases="-nL")
+    protected int numLabels = 4;
+
+    @Option(name="--weightInit",usage="How to initialize weights",aliases="-wI")
+    protected WeightInit weightInit = WeightInit.XAVIER;
+    @Option(name="--activation",usage="Activation function to use",aliases="-a")
+    protected String activation = "relu";
+    @Option(name="--updater",usage="Updater to apply gradient changes",aliases="-up")
+    protected Updater updater = Updater.NESTEROVS;
+    @Option(name="--learningRate", usage="Learning rate", aliases="-lr")
+    protected double lr = 5e-2;
+    @Option(name="--momentum",usage="Momentum rate",aliases="-mu")
+    protected double mu = 0.9;
+    @Option(name="--lambda",usage="L2 weight decay",aliases="-l2")
+    protected double l2 = 1e-3;
+    @Option(name="--regularization",usage="Boolean to apply regularization",aliases="-reg")
+    protected boolean regularization = true;
+    @Option(name="--split",usage="Percent to split for training",aliases="-split")
+    protected double split = 0.8;
+
+    public void run(String[] args) {
         Nd4j.dtype = DataBuffer.Type.DOUBLE;
 
-        boolean appendLabels = true;
-        int numExamples = 100;
-        int batchSize = 1;
-        int numBatches = NUM_IMAGES/batchSize;
+        // Parse command line arguments if they exist
+        CmdLineParser parser = new CmdLineParser(this);
+        try {
+            parser.parseArgument(args);
+        } catch (CmdLineException e) {
+            // handling of wrong arguments
+            System.err.println(e.getMessage());
+            parser.printUsage(System.err);
+        }
 
-        int iterations = 5;
-        int epochs = 3;
+        // standard vars
         int seed = 123;
-        double[] splitTrainTest = new double[]{ .8, .2};
-        int listenerFreq = batchSize;
-        int nTrain = (int) (numExamples * 0.8);
+        int listenerFreq = 1;
+        boolean appendLabels = true;
+        int numBatches = NUM_IMAGES/batchSize;
+        double[] splitTrainTest = new double[]{split, 1-split};
+        int nTrain = (int) (numExamples * split);
         int nTest = numExamples - nTrain;
 
         // Setup SparkContext
         SparkConf sparkConf = new SparkConf()
                 .setMaster("local[*]");
         sparkConf.setAppName("FaceDetection");
-        sparkConf.set("spak.executor.memory", "4g");
-        sparkConf.set("spak.driver.memory", "4g");
-        sparkConf.set(SparkDl4jMultiLayer.AVERAGE_EACH_ITERATION, String.valueOf(true));
+//        sparkConf.set("spak.executor.memory", "4g");
+//        sparkConf.set("spak.driver.memory", "4g");
+//        sparkConf.set(SparkDl4jMultiLayer.AVERAGE_EACH_ITERATION, String.valueOf(true));
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         log.info("Load data....");
 
+        ////////////// Load all 10 folders /////////////
 //        String[] tags = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample").list(new FilenameFilter() {
 //            @Override
 //            public boolean accept(File dir, String name) {
@@ -105,16 +137,21 @@ public class FaceDetection {
 //            }
 //        });
 //        List<String> labels = Arrays.asList(tags);
+        //////////////////////////////////////////////
 
-        // Load as sequence files onto RDD
-        // man / woman classification
+
+        ////////////// Load Gender folders /////////////
 //        File mainPath = new File(BaseImageLoader.BASE_DIR, "gender_class/*");
 //        List<String> labels = Arrays.asList(new String[]{"man", "woman"});
+        //////////////////////////////////////////////
 
-        // classification by name
+        ////////////// Load MS Folder /////////////
         File mainPath = new File(BaseImageLoader.BASE_DIR, "ms_sample");
-        List<String> labels = Arrays.asList(new String[]{"aaron_carter", "martina_hingis", "michelle_obama", "adam_brody"});
+        List<String> labels = Arrays.asList(new String[]{"liv_tyler", "michelle_obama", "aaron_carter", "al_gore"});
+        //////////////////////////////////////////////
 
+
+        ////////////// Load sequence into RDD /////////////
 //        File mainPath = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample/*");
 //        JavaPairRDD<String,PortableDataStream> sparkData = sc.binaryFiles(mainPath.toString());
 //        JavaPairRDD<Text,BytesWritable> filesAsBytes = sparkData.mapToPair(new FilesAsBytesFunction());
@@ -123,9 +160,10 @@ public class FaceDetection {
 //        JavaRDD<DataSet> fullData = data.map(new CanovaDataSetFunction(-1, NUM_LABELS, false));
 //        fullData.cache();
 //        JavaRDD<DataSet>[] trainTestSplit = fullData.randomSplit(splitTrainTest);
+        //////////////////////////////////////////////
 
 
-        // Alternative load
+        ////////////// Load files to DS and parallelize - seems to load more examples /////////////
 //        File mainPath = new File(BaseImageLoader.BASE_DIR, "thumbnails_features_deduped_sample");
 
         RecordReader recordReader = new ImageRecordReader(WIDTH, HEIGHT, CHANNELS, appendLabels, labels);
@@ -153,68 +191,24 @@ public class FaceDetection {
 
         JavaRDD<DataSet> sparkDataTrain = sc.parallelize(train);
         sparkDataTrain.persist(StorageLevel.MEMORY_ONLY());
-
+        //////////////////////////////////////////////
 
         log.info("Build model....");
         MultiLayerConfiguration.Builder builder = new NeuralNetConfiguration.Builder()
                 .seed(seed)
                 .iterations(iterations)
-                .activation("relu")
-                .weightInit(WeightInit.XAVIER)
+                .activation(activation)
+                .weightInit(weightInit)
                 .gradientNormalization(GradientNormalization.RenormalizeL2PerLayer)
                 .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
-                .learningRate(5e-2)
-                .momentum(0.9)
-                .regularization(true)
-                .l2(1e-3)
-                .updater(Updater.NESTEROVS)
+                .learningRate(lr)
+                .momentum(mu)
+                .regularization(regularization)
+                .l2(l2)
+                .updater(updater)
                 .useDropConnect(true)
-//                .list(9)
-//                .layer(0, new ConvolutionLayer.Builder(3, 3)
-//                        .name("cnn1")
-//                        .nIn(CHANNELS)
-//                        .stride(1, 1)
-//                        .padding(1, 1)
-//                        .nOut(64)
-//                        .build())
-//                .layer(1, new ConvolutionLayer.Builder(3, 3)
-//                        .name("cnn2")
-//                        .stride(1, 1)
-//                        .padding(1, 1)
-//                        .nOut(64)
-//                        .build())
-//                .layer(2, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{2, 2})
-//                        .name("pool1")
-//                        .stride(1, 1)
-//                        .build())
-//                .layer(3, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{2, 2})
-//                        .name("pool2")
-//                        .stride(1, 1)
-//                        .build())
-//                .layer(4, new ConvolutionLayer.Builder(3, 3)
-//                        .name("cnn3")
-//                        .stride(1, 1)
-//                        .padding(1, 1)
-//                        .nOut(64)
-//                        .build())
-//                .layer(5, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{2, 2})
-//                        .name("pool3")
-//                        .stride(1, 1)
-//                        .build())
-//                .layer(6, new DenseLayer.Builder()
-//                        .name("ffn1")
-//                        .nOut(400)
-//                        .dropOut(0.5)
-//                        .build())
-//                .layer(7, new DenseLayer.Builder()
-//                        .name("ffn1")
-//                        .nOut(200)
-//                        .dropOut(0.5)
-//                        .build())
-//                .layer(8, new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
-//                        .nOut(NUM_LABELS)
-//                        .activation("softmax")
-//                        .build())
+
+                // Example from Cifar
                 .list(10)
                 .layer(0, new ConvolutionLayer.Builder(5, 5)
                         .name("cnn1")
@@ -266,16 +260,14 @@ public class FaceDetection {
         //Create Spark multi layer network from configuration
         SparkDl4jMultiLayer sparkNetwork = new SparkDl4jMultiLayer(sc, model);
 
-
-
         log.info("Train model....");
-//        sparkNetwork.fitDataSet(trainTestSplit[0].coalesce(5));
         for(int i = 0; i < epochs; i++){
             sparkNetwork.fitDataSet(sparkDataTrain);
         }
         sparkDataTrain.unpersist();
 
         log.info("Evaluate model....");
+//      Alternatives if have a full set and break into trainTestSplit - need to pull 0 for train
 //        Evaluation evalActual = sparkNetwork.evaluate(trainTestSplit[1].coalesce(5), labels);
 
         JavaRDD<DataSet> sparkDataTest = sc.parallelize(test);
@@ -289,22 +281,8 @@ public class FaceDetection {
         log.info("****************Example finished********************");
     }
 
-    // Starting code to rename and move files
-//    public fixFileName(File path){
-//        Files.walkFileTree(path, new SimpleFileVisitor<path>()
-//        {
-//            @Override
-//            public FileVisitResult visitFile(Path filePath, BasicFileAttributes attrs) throws IOException
-//            {
-//                def fileName = filePath.fileName;
-//                def dirPath = filePath.parent;
-//                def newFileName = fileName.toString().trim().toLowerCase().replace(" ","_");
-//                def newFilePath = Paths.get(dirPath.toString(), newFileName);
-//                Files.move(filePath, newFilePath)
-//                return FileVisitResult.CONTINUE;
-//            }
-//        });
-//    }
-
+    public static void main(String[] args) throws Exception {
+        new FaceDetection().run(args);
+    }
 
 }
