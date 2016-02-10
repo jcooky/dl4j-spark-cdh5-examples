@@ -23,6 +23,7 @@ import org.deeplearning4j.nn.conf.GradientNormalization;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.Updater;
+import org.deeplearning4j.nn.conf.distribution.NormalDistribution;
 import org.deeplearning4j.nn.conf.layers.*;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
@@ -63,8 +64,8 @@ public class FaceDetection {
 
     public final static int NUM_IMAGES = 2215; // some are 50 and others 700
     public final static int NUM_LABELS = 10;
-    public final static int WIDTH = 80; // size varies
-    public final static int HEIGHT = 80;
+    public final static int WIDTH = 40; // size varies
+    public final static int HEIGHT = 40;
     public final static int CHANNELS = 3;
 
     // values to pass in from command line when compiled, esp running remotely
@@ -73,7 +74,7 @@ public class FaceDetection {
     @Option(name="--batchSize",usage="Batch size",aliases="-b")
     protected int batchSize = 1;
     @Option(name="--epochs",usage="Number of epochs",aliases="-ep")
-    protected int epochs = 2;
+    protected int epochs = 5;
     @Option(name="--iter",usage="Number of iterations",aliases="-i")
     protected int iterations = 2;
     @Option(name="--numLabels",usage="Number of categories",aliases="-nL")
@@ -86,15 +87,15 @@ public class FaceDetection {
     @Option(name="--updater",usage="Updater to apply gradient changes",aliases="-up")
     protected Updater updater = Updater.NESTEROVS;
     @Option(name="--learningRate", usage="Learning rate", aliases="-lr")
-    protected double lr = 5e-2;
+    protected double lr = 0.1;
     @Option(name="--momentum",usage="Momentum rate",aliases="-mu")
     protected double mu = 0.9;
     @Option(name="--lambda",usage="L2 weight decay",aliases="-l2")
-    protected double l2 = 1e-3;
+    protected double l2 = 0.1;
     @Option(name="--regularization",usage="Boolean to apply regularization",aliases="-reg")
     protected boolean regularization = true;
     @Option(name="--split",usage="Percent to split for training",aliases="-split")
-    protected double split = 0.8;
+    protected double split = 0.5;
 
     public void run(String[] args) {
         Nd4j.dtype = DataBuffer.Type.DOUBLE;
@@ -172,7 +173,7 @@ public class FaceDetection {
         } catch (IOException | InterruptedException e) {
             e.printStackTrace();
         }
-        DataSetIterator dataIter = new RecordReaderDataSetIterator(recordReader, batchSize, -1, NUM_LABELS);
+        DataSetIterator dataIter = new RecordReaderDataSetIterator(recordReader, batchSize, -1, numLabels);
         List<DataSet> allData = new ArrayList<>(numExamples);
         while(dataIter.hasNext()){
             allData.add(dataIter.next());
@@ -184,9 +185,10 @@ public class FaceDetection {
         List<DataSet> test = new ArrayList<>(nTest);
 
         int c = 0;
+        int d = 0;
         while(iter.hasNext()){
             if(c++ < nTrain) train.add(iter.next());
-            test.add(iter.next());
+            else if(d++ < (nTrain + nTest)) test.add(iter.next());
         }
 
         JavaRDD<DataSet> sparkDataTrain = sc.parallelize(train);
@@ -209,47 +211,130 @@ public class FaceDetection {
                 .useDropConnect(true)
 
                 // Example from Cifar
-                .list(10)
+//                .list(10)
+//                .layer(0, new ConvolutionLayer.Builder(5, 5)
+//                        .name("cnn1")
+//                        .nIn(CHANNELS)
+//                        .stride(1, 1)
+//                        .padding(2, 2)
+//                        .nOut(32)
+//                        .build())
+//                .layer(1, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
+//                        .name("pool1")
+//                        .build())
+//                .layer(2, new LocalResponseNormalization.Builder(3, 5e-05, 0.75).build())
+//                .layer(3, new ConvolutionLayer.Builder(5, 5)
+//                        .name("cnn2")
+//                        .stride(1, 1)
+//                        .padding(2, 2)
+//                        .nOut(32)
+//                        .build())
+//                .layer(4, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
+//                        .name("pool2")
+//                        .build())
+//                .layer(5, new LocalResponseNormalization.Builder(3, 5e-05, 0.75).build())
+//                .layer(6, new ConvolutionLayer.Builder(5, 5)
+//                        .name("cnn3")
+//                        .stride(1, 1)
+//                        .padding(2, 2)
+//                        .nOut(64)
+//                        .build())
+//                .layer(7, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
+//                        .name("pool3")
+//                        .build())
+//                .layer(8, new DenseLayer.Builder()
+//                        .name("ffn1")
+//                        .nOut(250)
+//                        .dropOut(0.5)
+//                        .build())
+//                .layer(9, new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
+//                        .nOut(numLabels)
+//                        .activation("softmax")
+//                        .build())
+
+                // TensorFlow
+                .list(9)
                 .layer(0, new ConvolutionLayer.Builder(5, 5)
                         .name("cnn1")
                         .nIn(CHANNELS)
-                        .stride(1, 1)
-                        .padding(2, 2)
-                        .nOut(32)
-                        .build())
-                .layer(1, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
-                        .name("pool1")
-                        .build())
-                .layer(2, new LocalResponseNormalization.Builder(3, 5e-05, 0.75).build())
-                .layer(3, new ConvolutionLayer.Builder(5, 5)
-                        .name("cnn2")
-                        .stride(1, 1)
-                        .padding(2, 2)
-                        .nOut(32)
-                        .build())
-                .layer(4, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
-                        .name("pool2")
-                        .build())
-                .layer(5, new LocalResponseNormalization.Builder(3, 5e-05, 0.75).build())
-                .layer(6, new ConvolutionLayer.Builder(5, 5)
-                        .name("cnn3")
+                        .dist(new NormalDistribution(0, 1e-4))
                         .stride(1, 1)
                         .padding(2, 2)
                         .nOut(64)
                         .build())
-                .layer(7, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
-                        .name("pool3")
+                .layer(1, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
+                        .name("pool1")
                         .build())
-                .layer(8, new DenseLayer.Builder()
+                .layer(2, new LocalResponseNormalization.Builder(4, 1e-3/9, 0.75).build())
+                .layer(3, new ConvolutionLayer.Builder(5, 5)
+                        .name("cnn2")
+                        .stride(1, 1)
+                        .padding(2, 2)
+//                        .dist(new NormalDistribution(0, 1e-4))
+                        .nOut(64)
+                        .build())
+                .layer(4, new LocalResponseNormalization.Builder(4, 1e-3/9, 0.75).build())
+                .layer(5, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
+                        .name("pool2")
+                        .build())
+                .layer(6, new DenseLayer.Builder()
                         .name("ffn1")
-                        .nOut(250)
+                        .nOut(384)
+//                        .dist(new NormalDistribution(4e-3, 4e-2))
                         .dropOut(0.5)
                         .build())
-                .layer(9, new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
-                        .nOut(NUM_LABELS)
+                .layer(7, new DenseLayer.Builder()
+                        .name("ffn2")
+                        .nOut(192)
+//                        .dist(new NormalDistribution(4e-3, 4e-2))
+                        .dropOut(0.5)
+                        .build())
+                .layer(8, new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
+                        .nOut(numLabels)
+//                        .dist(new NormalDistribution(4e-3, 1/192.0))
                         .activation("softmax")
                         .build())
 
+//http://www.openu.ac.il/home/hassner/projects/cnn_agegender/CNN_AgeGenderEstimation.pdf
+//                .list(9)
+//                .layer(0, new ConvolutionLayer.Builder(7, 7)
+//                        .name("cnn1")
+//                        .nIn(CHANNELS)
+//                        .nOut(96)
+//                        .build())
+//                .layer(1, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
+//                        .name("pool1")
+//                        .build())
+//                .layer(2, new LocalResponseNormalization.Builder(4, 1e-3/9, 0.75).build())
+//                .layer(3, new ConvolutionLayer.Builder(5, 5)
+//                        .name("cnn2")
+//                        .nOut(256)
+//                        .build())
+//                .layer(4, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
+//                        .name("pool2")
+//                        .build())
+//                .layer(5, new LocalResponseNormalization.Builder(4, 1e-3/9, 0.75).build())
+//                .layer(6, new ConvolutionLayer.Builder(3, 3)
+//                        .name("cnn3")
+//                        .nOut(384)
+//                        .build())
+//                .layer(7, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX, new int[]{3, 3})
+//                        .name("pool3")
+//                        .build())
+//                .layer(8, new DenseLayer.Builder()
+//                        .name("ffn1")
+//                        .nOut(512)
+//                        .dropOut(0.5)
+//                        .build())
+//                .layer(9, new DenseLayer.Builder()
+//                        .name("ffn1")
+//                        .nOut(512)
+//                        .dropOut(0.5)
+//                        .build())
+//                .layer(10, new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
+//                        .nOut(numLabels)
+//                        .activation("softmax")
+//                        .build())
                 .backprop(true).pretrain(false)
                 .cnnInputSize(HEIGHT, WIDTH, CHANNELS);
 
