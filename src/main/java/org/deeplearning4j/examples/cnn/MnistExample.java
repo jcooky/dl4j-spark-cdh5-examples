@@ -40,13 +40,15 @@ public class MnistExample {
 
         //Create spark context, and load data into memory
         SparkConf sparkConf = new SparkConf();
-        sparkConf.setMaster("local[*]");
+//        sparkConf.setMaster("local[*]");
         sparkConf.setAppName("MNIST");
+        sparkConf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer");
+        sparkConf.set("spark.kryo.registrator", "org.nd4j.Nd4jRegistrator");
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         int examplesPerDataSetObject = 32;
-        DataSetIterator mnistTrain = new MnistDataSetIterator(32, true, 12345);
-        DataSetIterator mnistTest = new MnistDataSetIterator(32, false, 12345);
+        DataSetIterator mnistTrain = new MnistDataSetIterator(32, 1000, false, true, true, 12345);
+        DataSetIterator mnistTest = new MnistDataSetIterator(32, 10, false, false, true, 12345);
         List<DataSet> trainData = new ArrayList<>();
         List<DataSet> testData = new ArrayList<>();
         while(mnistTrain.hasNext()) trainData.add(mnistTrain.next());
